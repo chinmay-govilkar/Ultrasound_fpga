@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+results/
+build/
+*.vcd
+*.jou
+*.log
+.Xil/
+*.cache/
+*.hw/
+*.sim/
+*.runs/
+*.ip_user_files/
+*.str
+*.dmp
+Vitis_Workspace/*/Debug/
+Vitis_Workspace/*/.metadata/

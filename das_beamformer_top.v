@@ -1,96 +1,92 @@
-`timescale 1ns / 1ps
-
+`timescale 1ns/1ps
+// Optional sequential gather/interpolate/sum: rectangular unnormalised signed DAS.
+// Supply NUM_LINES descriptors per pixel, ordered by line number. TLAST marks
+// the final descriptor of EACH PIXEL. Output TLAST marks the final FRAME pixel.
+// Memory is external (DDR adapter or small das_memory_matrix), one request at a time.
+// Descriptors=Python export_delay_table, explicit addr0,addr1,Q-fraction,valid.
+// protocol_error is sticky: discard the frame on any malformed descriptor.
 module das_beamformer_top #(
-    parameter NUM_LINES = 25,       // Your 25 mechanical transducer positions
-    parameter DATA_WIDTH = 14,      // 14-bit data from the FMC150 ADC
-    parameter DEPTH_BITS = 10,      // 1024 depth samples
-    parameter COORD_WIDTH = 16,     // 16-bit precision for coordinates
-    parameter ELEMENT_PITCH = 500   // 500 micrometers (0.5mm) between mechanical steps
+    parameter NUM_LINES=25,DATA_WIDTH=14,ADDR_WIDTH=16,
+    parameter LINE_WIDTH=(NUM_LINES>1 ? $clog2(NUM_LINES) : 1),FRAC_BITS=12,OUTPUT_WIDTH=32,
+    parameter PIXELS_PER_FRAME=241*401
 )(
-    input wire clk,
-
-    // --- Phase 1: Data Capture Inputs (From FMC150) ---
-    input wire we,
-    input wire [4:0] current_line,
-    input wire [DEPTH_BITS-1:0] write_addr,
-    input wire [DATA_WIDTH-1:0] data_in,
-
-    // --- Phase 2: Beamforming Control (From ARM Processor) ---
-    // The processor tells the FPGA: "Calculate the focus for this specific pixel"
-    input wire signed [COORD_WIDTH-1:0] target_focal_x,
-    input wire signed [COORD_WIDTH-1:0] target_focal_z,
-
-    // --- Phase 3: Final Output ---
-    output reg [31:0] final_pixel_intensity,
-    output reg        pixel_valid
+    input wire clk,rst_n,s_axis_tvalid,
+    output wire s_axis_tready,
+    input wire [LINE_WIDTH-1:0] s_axis_line,
+    input wire [ADDR_WIDTH-1:0] s_axis_addr0,s_axis_addr1,
+    input wire [FRAC_BITS-1:0] s_axis_fraction,
+    input wire s_axis_sample_valid,s_axis_tlast,
+    output wire mem_req_valid,
+    input wire mem_req_ready,
+    output reg [LINE_WIDTH-1:0] mem_req_line,
+    output reg [ADDR_WIDTH-1:0] mem_req_addr0,mem_req_addr1,
+    input wire mem_rsp_valid,
+    output wire mem_rsp_ready,
+    input wire signed [DATA_WIDTH-1:0] mem_rsp_data0,mem_rsp_data1,
+    output reg signed [OUTPUT_WIDTH-1:0] m_axis_tdata,
+    output reg m_axis_tvalid,m_axis_tlast,
+    input wire m_axis_tready,
+    output reg protocol_error
 );
-
-    // Massive internal wiring buses to connect our 25 math engines to our 25 memory banks
-    wire [(NUM_LINES * DEPTH_BITS)-1 : 0] massive_address_bus;
-    wire [(NUM_LINES * DATA_WIDTH)-1 : 0] massive_data_bus;
-    wire [NUM_LINES-1:0]                  valid_flags;
-
-    // 1. Instantiate the Memory Matrix (The 25 parallel BRAMs)
-    das_memory_matrix #(
-        .NUM_LINES(NUM_LINES), .DATA_WIDTH(DATA_WIDTH), .DEPTH_BITS(DEPTH_BITS)
-    ) memory_matrix_inst (
-        .clk(clk),
-        .we(we),
-        .current_line(current_line),
-        .write_addr(write_addr),
-        .data_in(data_in),
-        .delay_read_addrs(massive_address_bus), // Input: The 25 calculated addresses
-        .das_data_out(massive_data_bus)         // Output: The 25 raw echo samples
+    localparam ACCEPT=0,REQUEST=1,RESPONSE=2,ZERO=3,INTERP=4,HOLD=5;
+    localparam INTERP_WIDTH=DATA_WIDTH+FRAC_BITS+2;
+    localparam ACC_WIDTH=INTERP_WIDTH+$clog2(NUM_LINES);
+    localparam signed [ACC_WIDTH-1:0] ROUND=
+        {{(ACC_WIDTH-1){1'b0}},1'b1} << (FRAC_BITS-1);
+    reg [2:0] state;
+    reg [LINE_WIDTH-1:0] channel_count;
+    reg [31:0] pixel_count;
+    reg [FRAC_BITS-1:0] fraction_r;
+    reg signed [ACC_WIDTH-1:0] accumulator;
+    wire signed [INTERP_WIDTH-1:0] interp_value;
+    wire interp_valid;
+    wire input_interp_valid=(state==RESPONSE && mem_rsp_valid) || state==ZERO;
+    wire signed [DATA_WIDTH-1:0] input0=state==ZERO ? {DATA_WIDTH{1'b0}} : mem_rsp_data0;
+    wire signed [DATA_WIDTH-1:0] input1=state==ZERO ? {DATA_WIDTH{1'b0}} : mem_rsp_data1;
+    wire signed [ACC_WIDTH-1:0] extended=
+        {{(ACC_WIDTH-INTERP_WIDTH){interp_value[INTERP_WIDTH-1]}},interp_value};
+    wire signed [ACC_WIDTH-1:0] total=accumulator+extended;
+    assign s_axis_tready=state==ACCEPT;
+    assign mem_req_valid=state==REQUEST;
+    assign mem_rsp_ready=state==RESPONSE;
+    das_single_channel #(.DATA_WIDTH(DATA_WIDTH),.FRAC_BITS(FRAC_BITS)) interp(
+        .clk(clk),.rst_n(rst_n),.input_valid(input_interp_valid),
+        .sample0(input0),.sample1(input1),.fraction(fraction_r),
+        .interpolated_scaled(interp_value),.output_valid(interp_valid)
     );
-
-    // 2. Instantiate 25 parallel Focal Delay Engines
-    genvar i;
-    generate
-        for (i = 0; i < NUM_LINES; i = i + 1) begin : focal_channels
-            
-            // Calculate the physical X position of this specific transducer step
-            // (e.g., Step 0 = 0um, Step 1 = 500um, Step 2 = 1000um)
-            wire signed [COORD_WIDTH-1:0] physical_x_pos = i * ELEMENT_PITCH;
-
-            // Temporary wire to catch the calculated 16-bit address from the CORDIC
-            wire [15:0] calc_address;
-
-            // Stamp out one math engine for this specific position
-            das_single_channel #(
-                .COORD_WIDTH(COORD_WIDTH)
-            ) delay_engine_inst (
-                .clk(clk),
-                .focal_x(target_focal_x),
-                .focal_z(target_focal_z),
-                .transducer_x(physical_x_pos),
-                .read_address(calc_address),
-                .address_valid(valid_flags[i])
-            );
-
-            // Assign the bottom 10 bits (our BRAM depth) to the massive address bus
-            assign massive_address_bus[(i+1)*DEPTH_BITS-1 +: i*DEPTH_BITS] = calc_address[DEPTH_BITS-1:0];
-        end
-    endgenerate
-
-// 3. The "Sum" in Delay-and-Sum
-    integer j;
-    reg [31:0] accumulator;
-
     always @(posedge clk) begin
-        // Only sum the data if the CORDIC square root math is finished
-        if (valid_flags[0]) begin
-            accumulator = 0;
-            
-            // Instantly loop through all 25 BRAM outputs and add them together
-            for (j = 0; j < NUM_LINES; j = j + 1) begin
-                // FIXED: Using the +: operator for variable part-select
-                accumulator = accumulator + massive_data_bus[ (j*DATA_WIDTH) +: DATA_WIDTH ];
-            end
-            
-            final_pixel_intensity <= accumulator;
-            pixel_valid <= 1'b1;
+        if (!rst_n) begin
+            state<=ACCEPT; channel_count<=0; pixel_count<=0; accumulator<=0;
+            fraction_r<=0; mem_req_line<=0; mem_req_addr0<=0; mem_req_addr1<=0;
+            m_axis_tdata<=0; m_axis_tvalid<=0; m_axis_tlast<=0; protocol_error<=0;
         end else begin
-            pixel_valid <= 1'b0;
+            case(state)
+                ACCEPT: if (s_axis_tvalid) begin
+                    if (s_axis_line!=channel_count ||
+                        s_axis_tlast!=(channel_count==NUM_LINES-1)) protocol_error<=1;
+                    mem_req_line<=s_axis_line; mem_req_addr0<=s_axis_addr0;
+                    mem_req_addr1<=s_axis_addr1; fraction_r<=s_axis_fraction;
+                    state<=s_axis_sample_valid ? REQUEST : ZERO;
+                end
+                REQUEST: if (mem_req_ready) state<=RESPONSE;
+                RESPONSE: if (mem_rsp_valid) state<=INTERP;
+                ZERO: state<=INTERP;
+                INTERP: if (interp_valid) begin
+                    if (channel_count==NUM_LINES-1) begin
+                        m_axis_tdata<=(total+ROUND) >>> FRAC_BITS;
+                        m_axis_tvalid<=1; m_axis_tlast<=pixel_count==PIXELS_PER_FRAME-1;
+                        state<=HOLD; accumulator<=0; channel_count<=0;
+                    end else begin
+                        accumulator<=total; channel_count<=channel_count+1'b1; state<=ACCEPT;
+                    end
+                end
+                HOLD: if (m_axis_tready) begin
+                    m_axis_tvalid<=0; m_axis_tlast<=0;
+                    pixel_count<=pixel_count==PIXELS_PER_FRAME-1 ? 0 : pixel_count+1'b1;
+                    state<=ACCEPT;
+                end
+                default: state<=ACCEPT;
+            endcase
         end
     end
-    endmodule
+endmodule
