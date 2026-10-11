@@ -1,39 +1,30 @@
-`timescale 1ns / 1ps
-
-module das_channel_math #(
-    parameter COORD_WIDTH = 16  // 16-bit precision for spatial coordinates
-)(
-    input  wire                   clk,
-    
-    // Coordinates for the current pixel we want to draw
-    input  wire signed [COORD_WIDTH-1:0] focal_x,  // X-coordinate of the pixel
-    input  wire signed [COORD_WIDTH-1:0] focal_z,  // Depth (Z) of the pixel
-    
-    // Coordinate of this specific transducer position
-    input  wire signed [COORD_WIDTH-1:0] transducer_x,
-    
-    // Output: The squared distance (X^2 + Z^2) ready for the Square Root engine
-    output reg  unsigned [(COORD_WIDTH*2)-1:0] distance_squared
+`timescale 1ns/1ps
+// Optional geometry diagnostic, NOT an address generator. Output units=length^2.
+// Software computes (Tx distance+Rx distance)/c, timing calibration, then Fs.
+module das_channel_math #(parameter COORD_WIDTH=18)(
+    input wire clk,rst_n,input_valid,
+    input wire signed [COORD_WIDTH-1:0] focal_x,focal_z,transducer_x,transducer_z,
+    output reg [2*COORD_WIDTH+2:0] distance_squared,
+    output reg output_valid
 );
-
-    // Pipeline Registers to ensure high clock speeds (100MHz+)
-    reg signed [COORD_WIDTH-1:0] dx;
-    reg signed [COORD_WIDTH-1:0] dz;
-    
-    reg signed [(COORD_WIDTH*2)-1:0] dx_sq;
-    reg signed [(COORD_WIDTH*2)-1:0] dz_sq;
-
+    localparam DIFF_WIDTH=COORD_WIDTH+1,SQUARE_WIDTH=2*DIFF_WIDTH;
+    reg signed [DIFF_WIDTH-1:0] dx,dz;
+    reg [SQUARE_WIDTH-1:0] dx_sq,dz_sq;
+    reg v0,v1;
     always @(posedge clk) begin
-        // Stage 1: Calculate the distance differences
-        dx <= focal_x - transducer_x;
-        dz <= focal_z; // Z distance is just the depth, assuming transducer is at Z=0
-
-        // Stage 2: Calculate the squares (Vivado will route these to DSP48 Slices!)
-        dx_sq <= dx * dx;
-        dz_sq <= dz * dz;
-
-        // Stage 3: Sum the squares (A^2 + B^2)
-        distance_squared <= $unsigned(dx_sq + dz_sq);
+        if (!rst_n) begin
+            dx<=0; dz<=0; dx_sq<=0; dz_sq<=0; distance_squared<=0;
+            v0<=0; v1<=0; output_valid<=0;
+        end else begin
+            v0<=input_valid; v1<=v0; output_valid<=v1;
+            if (input_valid) begin
+                dx<=$signed({focal_x[COORD_WIDTH-1],focal_x})-
+                    $signed({transducer_x[COORD_WIDTH-1],transducer_x});
+                dz<=$signed({focal_z[COORD_WIDTH-1],focal_z})-
+                    $signed({transducer_z[COORD_WIDTH-1],transducer_z});
+            end
+            if (v0) begin dx_sq<=dx*dx; dz_sq<=dz*dz; end
+            if (v1) distance_squared<={1'b0,dx_sq}+{1'b0,dz_sq};
+        end
     end
-
 endmodule
