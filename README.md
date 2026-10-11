@@ -1,62 +1,88 @@
-# Mechanically scanned ultrasound: calibrated DAS reference
+# Ultrasound DAS on Eclypse Z7 and Zmod Scope 1410-105
 
 One transducer transmits and receives at each of 25 mechanical positions. RF is
 stored as 25 **logical acquisition rows**, then reconstructed pixel by pixel.
 This is monostatic synthetic-aperture focusing (SAFT). Mechanical scanning limits
-frame rate; this acquisition is not simultaneous ultrafast plane-wave imaging.
+frame rate; the scene must remain stationary through the scan.
 
 The corrected delay is `s_k = Fs * (2*distance_k/c + system_delay_k - t0_k)`.
-Interpolate signed RF coherently; take the analytic sum's magnitude afterwards.
+Interpolate signed RF coherently, then take the analytic sum's magnitude.
 Use measured positions, sound speed, trigger origin and receiver latency.
 
-## Run the complete Python demonstration
+## Selected platform
+
+Eclypse Z7 has an XC7Z020-1CLG484C and 1 GiB DDR3L. Use Zmod Scope **1410-105**
+on a SYZYGY port and Digilent's current **ZmodScopeController**. The physical
+AD9648 ADC has two 14-bit inputs and a 105 MSPS rated ceiling. This project's
+configured default is **100 MSPS**, which meets the >60 MSPS requirement and
+leaves clock margin. Declare the actual configured and verified Fs in each file;
+105 MSPS is not automatically the board's sample clock.
+
+The current controller calibrates samples to **signed 16-bit** words, packing
+CH1 in `[31:16]` and CH2 in `[15:0]`. Keep this precision. The legacy
+`ZmodADC1410_Controller` and its old software-library DMA format are different.
+
+## Run the Python demonstration
 
 ```bash
 python -m pip install -r requirements.txt
 python beamform_das.py simulate --output-dir results/demo
-python beamform_das.py reconstruct results/demo/acquisition.npz --output-dir results/tapered --apodization hann --coherence-weight
+python beamform_das.py reconstruct results/demo/acquisition.npz --output-dir results/demo_tapered --apodization hann --coherence-weight
 ```
 
-Defaults: 250 MSPS, 25 positions at 1 mm pitch centred about zero, x=-12..12 mm,
-z=10..50 mm, 241x401 pixels, 80 us synthetic record. The original RTL used 0.5 mm
-pitch starting at x=0; neither nominal layout replaces measured stage positions.
-The 1 mm pitch demonstration intentionally exposes spatial aliasing. Windowing
-and coherence weighting help clutter but cannot restore missing spatial data.
+Defaults: 100 MSPS, 25 positions at 1 mm pitch centred about zero, x=-12..12 mm,
+z=10..50 mm, 241x401 pixels, 80 us record = **8000 samples per position**.
+The full selected-channel frame is **400000 bytes**. An explicitly configured
+105 MSPS, 80 us acquisition uses 8400 samples and 420000 bytes.
+The example 1 mm pitch exposes spatial aliasing; use measured stage coordinates.
+Windowing and coherence weighting reduce clutter but cannot restore missing data.
 
-## Reconstruct ADC data
+## Reconstruct acquired RF
 
-Capture one echo window at each position. DMA writes sign-extended little-endian
-int16 samples to DDR. Concatenate the 25 equal records in physical scan order:
+The new FPGA top selects a physical receiver channel, captures its whole echo
+window, then outputs little-endian signed int16 samples for DMA. Concatenate the
+25 records in scan order. For the default CH1, low gain, AC coupling configuration:
 
 ```bash
-python pack_rf.py frame.bin --positions 25 --samples 20000 --fs-mhz 250 --pitch-mm 1 --output acquisition.npz
+python pack_rf.py frame.bin --samples 8000 --fs-mhz 100 --receiver-channel 1 --gain low --coupling ac --output acquisition.npz
 python beamform_das.py reconstruct acquisition.npz --output-dir results/real
 ```
 
-`pack_rf.py` also accepts 25 separate files, measured x,z CSV positions (metres),
-per-line timing CSV (seconds), and explicit raw ADC encodings. See `--help`.
-Do not choose raw-word decoding for data already sign-extended by the new capture
-module. NPZ keys: `rf`, `fs_hz`, `rx_positions_m`, optionally `tx_positions_m`,
-`c_m_s`, `t0_s`, `system_delay_s`. Shape of RF: `(positions,time_samples)`.
+If you instead record the current controller's two-channel 32-bit stream:
 
-## Hardware status and scope
+```bash
+python pack_rf.py scope_frame.bin --format scope32 --receiver-channel 1 --samples 8000 --fs-mhz 100 --output acquisition.npz
+```
 
-Recommended Stage 1: FMC150 vendor PHY/configuration -> triggered whole-line
-capture BRAM -> AXIS clock converter -> DMA -> DDR -> Python reconstruction.
+Gain, coupling and channel flags document the actual capture; they do not change
+hardware. `--format raw16 --encoding twos-complement --adc-bits 14` is reserved
+for explicitly right-aligned uncalibrated ADC words. Never apply 14-bit decoding
+to calibrated controller output. The importer rejects rates above 105 MSPS and
+records above this profile's 16384-sample capacity.
 
-- `ultrasound_engine_top.v`: acquisition top, post-PHY signed samples.
-- `fmc150_axi_capture.v`: finite line capture, error flag, correct AXIS stalls/TLAST.
-- `das_beamformer_top.v`: optional sequential signed gather/interpolate/sum core;
-  software supplies delays, external memory supplies adjacent RF samples.
-- `das_single_channel.v`: signed Q12 interpolation pipeline.
-- `das_memory_matrix.v`: optional small-record integration memory; full dataset uses DDR.
-- `das_channel_math.v`: optional wide-coordinate squared-distance diagnostic.
+The packer also accepts 25 files, measured x,z CSV positions in metres and
+per-line timing CSV in seconds. NPZ stores RF, Fs, geometry, calibration and source
+metadata. Reconstruction uses the file's Fs; older 250 MSPS data are not relabelled.
 
-All six module interfaces were changed intentionally; they are not drop-in
-replacements for the old block design. No missing `cordic_0` or `selectio_wiz_0`
-black boxes are asserted to be present. FMC150 BSP, SPI/clock setup, actual pin
-constraints, PS control CDC/DMA driver, and board timing closure remain required.
-This repository does **not** contain a verified 250 MSPS board bitstream.
+## Hardware path and status
+
+Digilent ZmodScopeController -> physical-channel adapter -> finite line BRAM ->
+AXIS clock/width conversion -> S2MM DMA -> PS DDR -> Python reconstruction.
+
+- `zmod_scope_adapter.v`: CH1/CH2 selection latched with arm; controller TREADY stays high.
+- `adc_line_capture.v`: 16384 x16 line buffer, missing-word/error handling and stable AXIS packet.
+- `ultrasound_engine_top.v`: Eclypse controller boundary and acquisition status gating.
+- `das_beamformer_top.v`: optional sequential signed 16-bit RF gather/interpolate/sum.
+- `das_single_channel.v`: signed Q12 interpolation with guard bits.
+- `das_memory_matrix.v`: optional small-record memory; initial dataset stored in DDR.
+- `das_channel_math.v`: optional wide squared-distance diagnostic.
+
+`fmc150_axi_capture.v` has been replaced by the board-independent capture module.
+The top's ports changed to the current Zmod controller interface. Follow
+[hardware/integration.md](hardware/integration.md) for the exact clock, status,
+calibration, channel, DMA and trigger wiring. The vendor PHY/SPI/relay/calibration
+IP and actual board XDC must be integrated into an Eclypse Vivado project.
+No routed bitstream or physical board acquisition was verified here.
 
 ## Validation and optional acceleration
 
@@ -68,10 +94,11 @@ vivado -mode batch -source hardware/synth_ooc.tcl
 python beamform_das.py export-lut acquisition.npz --output-dir results/lut
 ```
 
-HDL tests require Icarus Verilog; synthesis checks require Yosys (or run the Vivado
-script). The exported LUT targets rectangular, unnormalised signed RF DAS. The
-optional core is not an analytic-envelope or coherence-weight accelerator.
+HDL tests need Icarus; synthesis checks need Yosys or Vivado. The OOC script
+uses the Eclypse FPGA part and a 10 ns default sample period. The optional DAS
+core implements rectangular unnormalised real RF sums; the analytic envelope,
+coherence weighting and image formation remain in Python.
 
-See [the complete review](docs/review_and_implementation.md),
-[hardware integration](hardware/integration.md) and
+See [the complete updated review](docs/review_and_implementation.md),
+[the platform migration](docs/eclypse_migration.md) and
 [validation evidence](docs/validation.md).

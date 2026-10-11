@@ -1,13 +1,13 @@
 `timescale 1ns/1ps
 // Post-PHY boundary: one SIGNED sample per adc_clk, all control synchronous.
-// FMC150 BSP provides actual LVDS/SPI/clock interface. AXIS clock=adc_clk.
+// Board controller provides centred words; AXIS clock=adc_clk.
 // Use AMD AXIS Clock Converter before a DMA in a different clock domain.
 // Buffer the entire line: ADC capture cannot be backpressured.
-module fmc150_axi_capture #(
-    parameter DATA_WIDTH=14, MAX_SAMPLES=32768,
+module adc_line_capture #(
+    parameter DATA_WIDTH=16, MAX_SAMPLES=16384,
     parameter COUNT_WIDTH=$clog2(MAX_SAMPLES+1), LINE_WIDTH=5
 )(
-    input wire adc_clk,rst_n,arm,trigger,adc_valid,
+    input wire adc_clk,rst_n,arm,trigger,adc_valid,adc_error,
     input wire [COUNT_WIDTH-1:0] record_samples,
     input wire [LINE_WIDTH-1:0] line_id,
     input wire signed [DATA_WIDTH-1:0] adc_data,
@@ -35,6 +35,7 @@ module fmc150_axi_capture #(
             line_done<=0; capture_error<=0;
         end else begin
             line_done<=0;
+            if ((state==ARMED || state==CAPTURE) && adc_error) capture_error<=1;
             case(state)
                 IDLE: if (arm) begin
                     capture_error<=0;

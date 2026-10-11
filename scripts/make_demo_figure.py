@@ -20,7 +20,9 @@ def main():
     axes[0].set_ylabel("Depth (mm)")
     axes[1].legend(loc="lower right",fontsize=8)
     fig.colorbar(image,ax=axes,label="Amplitude relative to each image peak (dB)",shrink=.85)
-    fig.suptitle("25 positions at 1 mm pitch • 2.25 MHz point-source simulation",fontsize=12)
+    with np.load(root/"results/demo/acquisition.npz") as acquisition:
+        fs_mhz=float(acquisition["fs_hz"])/1e6
+    fig.suptitle(f"25 positions at 1 mm pitch | 2.25 MHz simulation | {fs_mhz:g} MSPS",fontsize=12)
     path=root/"docs/assets/das_comparison.png"; path.parent.mkdir(parents=True,exist_ok=True)
     fig.savefig(path,dpi=170); plt.close(fig)
     print(path)

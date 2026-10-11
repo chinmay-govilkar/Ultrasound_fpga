@@ -1,15 +1,21 @@
-# Ultrasound DAS: repository review and implementation
+# Ultrasound DAS review and Eclypse implementation
 
-Prepared for Chinmay Govilkar • 6 October 2026
+Prepared for Chinmay Govilkar • Updated 11 October 2026
 
-Repository: chinmay-govilkar/Ultrasound_fpga. Audited base commit:
+The selected platform is now Eclypse Z7 + Zmod Scope 1410-105, configured at
+100 MSPS with calibrated signed 16-bit RF. A reusable FPGA line buffer captures
+one receiver channel, ARM stores 25 records in DDR, and Python reconstructs the
+image. The current vendor controller, clock and packing contracts replace the
+previous ZedBoard/FMC150 assumptions. The acoustic DAS model is unchanged.
+
+Repository: chinmay-govilkar/Ultrasound_fpga. Original audited base commit:
 60ca7e9d2e5efb4c3410f4c75788b38b5ea6b251. All six original Verilog files and the
 README were read. There was no Python implementation, Vivado project, CORDIC
 configuration, SelectIO configuration, XDC, measured RF dataset or testbench in
 that snapshot. The revised Python is runnable; revised RTL is functionally
 simulated post-PHY logic. A verified board bitstream remains a separate milestone.
 
-## 1. What the proposed algorithm can build
+## 1 What the proposed algorithm can build
 
 The proposed gather-and-sum operation is a valid starting point for a mechanically
 scanned, monostatic synthetic aperture: one element transmits and receives at each
@@ -31,7 +37,7 @@ Ultrafast plane-wave imaging needs a different transmit/receive architecture,
 usually many simultaneous receivers. Jensen et al. [1] provides synthetic-aperture
 background; the present 25 same-element Tx/Rx records are a restricted acquisition.
 
-## 2. Correct timing and intensity equations
+## 2 Correct timing and intensity equations
 
 For pixel p=(x,z) and monostatic position r_k=(x_k,z_k), define R_k=norm(p-r_k).
 
@@ -73,40 +79,39 @@ sums those complex values, then takes magnitude for the envelope. B-mode uses
 envelope would represent power; its logarithm would instead use 10*log10.
 Taking absolute value once per real output pixel is not an analytic envelope.
 
-## 3. Concrete numerical checks
+## 3 Numerical checks for the selected platform
 
-Example: 25 positions x_k=(k-12)*1 mm, c=1540 m/s, Fs=250 MSPS, no timing offsets.
-For pixel (0,30 mm), the centre trace index is 9740.259740, nearest index 9740.
-The outer trace at x=-12 mm has index 10490.580793, nearest index 10491.
+Example: 25 positions x_k=(k-12)*1 mm, c=1540 m/s, Fs=100 MSPS, no timing offsets.
+For pixel (0,30 mm), the centre trace index is 3896.103896, nearest index 3896.
+The outer trace at x=-12 mm has index 4196.232317, nearest index 4196.
 
 | Position magnitude (mm) | Fractional index | Nearest sample |
 | --- | --- | --- |
-| 0 | 9740.259740 | 9740 |
-| 1 | 9745.669493 | 9746 |
-| 2 | 9761.880765 | 9762 |
-| 3 | 9788.839891 | 9789 |
-| 4 | 9826.458409 | 9826 |
-| 5 | 9874.614497 | 9875 |
-| 6 | 9933.154897 | 9933 |
-| 7 | 10001.897273 | 10002 |
-| 8 | 10080.632920 | 10081 |
-| 9 | 10169.129716 | 10169 |
-| 10 | 10267.135260 | 10267 |
-| 11 | 10374.380071 | 10374 |
-| 12 | 10490.580793 | 10491 |
+| 0 | 3896.103896 | 3896 |
+| 1 | 3898.267797 | 3898 |
+| 2 | 3904.752306 | 3905 |
+| 3 | 3915.535956 | 3916 |
+| 4 | 3930.583364 | 3931 |
+| 5 | 3949.845799 | 3950 |
+| 6 | 3973.261959 | 3973 |
+| 7 | 4000.758909 | 4001 |
+| 8 | 4032.253168 | 4032 |
+| 9 | 4067.651887 | 4068 |
+| 10 | 4106.854104 | 4107 |
+| 11 | 4149.752028 | 4150 |
+| 12 | 4196.232317 | 4196 |
 
-Both positive and negative positions of each magnitude use the same index for
-this centred pixel. General pixels have different channel delays.
+Positive and negative positions have the same delay for this centred pixel;
+general pixels have different delays. The longest path in x=-12..12 mm,
+z=10..50 mm takes 72.028180 us. At 100 MSPS its index is 7202.817986, requiring
+at least 7204 samples for the grid, before timing uncertainty and pulse-tail
+margin. The 80 us example contains 8000 samples and ends at 79.99 us. At verified
+105 MSPS the corresponding minimum is 7564 samples and the 80 us record is 8400.
+The helper required_samples uses the actual stored Fs and calibrated geometry.
+Older 250 MSPS acquisitions remain valid with their original Fs; changing only
+the file's rate would change inferred depths and is not resampling.
 
-For x=-12..12 mm and z=10..50 mm, the longest two-way path is between opposite
-lateral extremes at 50 mm depth: 2*sqrt(24^2+50^2) mm. It takes 72.028180 us,
-or index 18007.044966. A record starting at zero needs at least 18009 samples
-for that grid's interpolation support, before latency uncertainty and pulse-tail
-margin. The helper required_samples computes this bound for the configured grid.
-An 80 us example capture contains 20000 samples and ends at 79.996 us; that margin
-is an example, not a claim about the actual element's ring-down.
-
-## 4. Flaws found in the original repository
+## 4 Flaws found in the original repository on 6 October
 
 | Location | Defect and effect | Resolution |
 | --- | --- | --- |
@@ -124,44 +129,47 @@ is an example, not a claim about the actual element's ring-down.
 | Envelope/readiness | abs() was described as envelope; missing generated IP/constraints were described as active hardware. | Analytic envelope in software; missing physical integration clearly identified. |
 | Repository hygiene | .gitignore.txt is not Git's ignore filename; no executable reference or verification suite. | .gitignore, standalone Python, RF packer, Python/HDL tests and synthesis scripts. |
 
-## 5. Memory, RF bandwidth and arithmetic
+## 5 Memory RF bandwidth and arithmetic
 
-At 250 MSPS, 14 raw bits require 3.5 Gbit/s (437.5 MB/s) for one continuously
-sampled ADC input. The convenient 16-bit DMA representation needs 500 MB/s if
-streamed continuously. Two seconds at one position would require 875 MB packed
-or 1 GB padded. There is no need to continuously record through the mechanical
-move; capture only the relevant echo window on each firing.
+At 100 MSPS one physical 14-bit ADC input produces 1.4 Gbit/s of converter data.
+The calibrated int16 channel is 200 MB/s; both packed channels are 400 MB/s.
+The whole-line buffer accepts the echo window at full cadence, then drains it
+without letting DMA backpressure stop the converter. Do not record throughout
+mechanical moves when only a finite echo window is needed.
 
-| Capture strategy | Samples across 25 positions | 16-bit storage |
+| Capture strategy | Samples across 25 positions | Selected-channel int16 storage |
 | --- | --- | --- |
-| 80 us at 250 MSPS | 500000 | 1000000 bytes (0.954 MiB) |
-| Same window after anti-aliased /4 RF decimation | 125000 | 250000 bytes |
-| 2 s at each of 25 positions, continuous | 12500000000 | 25 GB |
+| 80 us at 100 MSPS | 200000 | 400000 bytes |
+| 80 us at verified 105 MSPS | 210000 | 420000 bytes |
+| Default after anti-aliased /4 RF decimation | 50000 | 100000 bytes |
+| 2 s per position at 100 MSPS | 5000000000 | 10 GB |
 
-ZedBoard has 512 MB DDR [3]. XC7Z020 has 140 36-Kbit BRAM blocks [4]. The full
-80 us, 25-position dataset has 7 million useful ADC bits before storage padding,
-exceeding the chip's nominal BRAM bit capacity. Twenty-five full padded BRAM
-banks are therefore the wrong initial storage plan. One reusable line buffer
-plus DDR solves this without demanding sustained 500 MB/s DMA during capture.
+Eclypse has 1 GiB DDR3L [6]; XC7Z020 has 140 RAMB36 blocks [4]. The default
+25-position int16 dataset has 3.2 Mbit and fits the nominal 5.16 Mbit BRAM
+capacity, but allocating 25 independent 8192x16 banks would consume roughly
+100 RAMB36 blocks. At 105 MSPS, rounding each 8400-word record to 16384 words
+would need about 200 blocks, exceeding capacity. Other packed memory layouts
+may differ. The initial design therefore retains one reusable 16384x16 line
+buffer and DDR for all records; budget actual mapping before adding full RF BRAM.
 
-The new capture controller stores one line at the ADC cadence and drains it
-after acquisition. With no downstream stalls, its simple drain takes three
-sample-clock cycles per word: approximately 240 us for 20000 words at 250 MHz.
-This trades transfer latency for simple correct handshaking and is appropriate
-when mechanical settling dominates. It is not a continuous streaming recorder.
+The buffer supports 80 us at both 100 and 105 MSPS. Its simple drain takes three
+sample-clock cycles per word, approximately 240 us per 80 us record without
+stalls. This is appropriate when mechanical settling dominates. It is a finite
+recording design, not continuous capture during draining.
 
-For 25 signed 14-bit RF samples, the extreme integer sums are -204800 and +204775.
-Nineteen signed bits cover -262144..+262143. The fractional interpolation core
-keeps additional Q12 and guard bits through accumulation, then rounds once and
-sign-extends the result to 32 bits. No magnitude operation precedes addition.
+The physical ADC is 14-bit but the controller's calibrated RF is signed 16-bit.
+Twenty-five full-scale values sum to -819200 or +819175; 21 signed integer bits
+cover this range. Q12 interpolation retains additional fractional and guard
+bits, rounds once after accumulation and produces signed 32-bit RF. Do not
+truncate calibration results to 14 bits or take magnitudes before summation.
 
-At 2.25 MHz, 250 MSPS is strong oversampling. Acquisition must satisfy the
-received RF bandwidth, not just centre frequency. Optional resample_poly
-decimation includes anti-alias filtering and updates Fs while retaining the time
-origin. Simply selecting every fourth raw sample is not equivalent. Validate
-passband, timing and image error before implementing a hardware decimator.
+100 MSPS strongly oversamples a 2.25 MHz carrier. Optional resample_poly
+anti-aliased /4 decimation yields 25 MSPS while preserving the timing origin.
+The >60 MSPS requirement is met by the ADC acquisition; an optional processed
+RF rate can be lower if the received bandwidth and image error permit it.
+Validate passband and timing before implementing a hardware decimator.
 
-## 6. Physical image-quality limitations
+## 6 Physical image quality limitations
 
 Wavelength is about 0.684 mm at 2.25 MHz and c=1540 m/s. For this monostatic
 point model, narrowband phase is 4*pi*R/lambda. Its spatial derivative has
@@ -196,11 +204,11 @@ speckle, finite-piston field or clinical image quality is claimed.
 
 ![Plain and weighted synthetic DAS](assets/das_comparison.png)
 
-## 7. Hardware/software allocation
+## 7 Hardware and software allocation
 
 | Function | Initial location | Reason and later option |
 | --- | --- | --- |
-| FMC150 clocks/SPI/LVDS lane recovery | FPGA PHY plus vendor configuration software | Sample-rate operation and physical timing; requires actual BSP and constraints. |
+| Zmod clock/SPI/IDDR/FIFO and gain calibration | Digilent controller plus ARM configuration | Preserve vendor physical interface; load factory processed coefficients and relay states. |
 | Trigger/record count/line capture | FPGA | Deterministic echo-window timing; full-line buffer absorbs DMA stalls. |
 | Stage move/settle and scan identity | ARM/controller | Mechanical control and acquisition metadata. |
 | DMA, cache-safe buffers, DDR storage | FPGA DMA plus ARM driver | Store 25 logical records without 25 full BRAM banks. |
@@ -223,14 +231,17 @@ The existing optional core returns the real RF sum only. Two appropriately
 scaled I/Q passes are a possible extension; that preprocessing/packing is not
 provided. Applying abs to real RF does not supply the missing quadrature signal.
 
-## 8. Exact file inventory and interface changes
+## 8 Exact file inventory and interface changes
 
 | File | Delivered role |
 | --- | --- |
 | beamform_das.py | Complete standalone DAS API and CLI; monostatic/bistatic geometry, calibration, interpolation, analytic envelope, coverage, optional taper/aperture/CF/filter/decimation, synthetic data and LUT export. |
 | pack_rf.py | Raw binary DMA to calibrated NPZ, explicit ADC encoding, measured positions/timing and rail count. |
-| fmc150_axi_capture.v | Rewritten post-PHY finite capture and stable 16-bit AXIS line packet. |
-| ultrasound_engine_top.v | Rewritten acquisition-only wrapper; coordinate/abs beamformer chain removed. |
+| adc_line_capture.v | Replaces fmc150_axi_capture.v; generic finite 16384x16 capture, source error status and stable AXIS packet. |
+| zmod_scope_adapter.v | New current-controller adapter; physical CH1/CH2 selected at arm, permanent upstream TREADY. |
+| eclypse_z7.py | New 100 MSPS profile, 105 MSPS ceiling and calibrated packed-channel decoder. |
+| hardware/eclypse_scope_config.tcl | New controller parameter configuration for Scope 1410-105 at 100 MSPS in an existing BD. |
+| ultrasound_engine_top.v | Current Zmod controller boundary, source readiness/error gating and selected-channel acquisition. |
 | das_beamformer_top.v | Rewritten software-delay, external-memory signed core with pixel/frame progress and protocol_error. |
 | das_single_channel.v | Rewritten signed Q12 interpolation pipeline; missing CORDIC dependency removed. |
 | das_memory_matrix.v | Rewritten small-record matrix with two synchronous reads, held responses and line-range error. |
@@ -238,11 +249,12 @@ provided. Applying abs to real RF does not supply the missing quadrature signal.
 | tests and hardware/synth_ooc.tcl | Numerical and RTL regression suites, independent integer vectors, synthesis/resource checks and reproducible Vivado synthesis entry point. |
 | README, hardware/integration.md, docs | Updated architecture, integration contracts, audit and validation evidence. |
 
-All six Verilog port interfaces changed. Rebuild the block design around the
-post-PHY acquisition boundary; do not reconnect old ports by position. No new
-unverified physical deserializer or generated vendor IP has been invented.
-Stage 1 uses only the acquisition wrapper and capture module. The other four
-Verilog modules belong to optional acceleration/diagnostic work.
+The original six Verilog interfaces were replaced during the first review. This
+revision changes the acquisition top to the current Zmod controller boundary,
+adds a physical-channel adapter and uses signed 16-bit defaults in the optional
+compute path. Rebuild the BD by named ports. Stage 1 uses the top, adapter and
+line capture; the other four modules are optional acceleration/diagnostic logic.
+Vendor IP, physical constraints, control CDC and DMA remain external project blocks.
 
 The LUT is pixel-major and includes addr0, addr1, fractional coefficient and
 validity. A full 96641x25 table already occupies tens of MB in its exported
@@ -250,21 +262,23 @@ native array representation. Keep it in host/DDR memory or generate it by tiles;
 it does not fit in Z7020 BRAM. Inspect hardware/integration.md for descriptor
 TLAST convention, memory response protocol and cache/DMA requirements.
 
-## 9. How to run and use the code
+## 9 How to run and use the code
 
 ```bash
 python -m pip install -r requirements.txt
 python beamform_das.py simulate --output-dir results/demo
 python beamform_das.py reconstruct results/demo/acquisition.npz --output-dir results/tapered --apodization hann --coherence-weight
-python pack_rf.py frame.bin --positions 25 --samples 20000 --fs-mhz 250 --output acquisition.npz
+python pack_rf.py frame.bin --samples 8000 --fs-mhz 100 --receiver-channel 1 --output acquisition.npz
 python beamform_das.py reconstruct acquisition.npz --output-dir results/real
 python beamform_das.py export-lut acquisition.npz --output-dir results/lut
 ```
 
 For measured data, pack_rf accepts either one line-major frame file or 25 files
-listed in acquisition order. Each word is little-endian, sign-extended int16
-from the new RTL. Choose an explicit alternative encoding only for unconverted
-raw ADC words. Override example pitch using measured CSV positions in metres;
+listed in acquisition order. The default signed16 format is little-endian calibrated int16 from the new top.
+The scope32 format extracts CH1 upper or CH2 lower int16 from current controller
+words. raw16 explicitly decodes uncalibrated, right-aligned ADC codes. Legacy
+ZmodADC1410_Controller words are not scope32. Channel, gain and coupling flags
+record actual settings; software flags do not configure hardware. Override example pitch using measured CSV positions in metres;
 override sound speed and time calibration. NPZ stores those fields with RF and Fs.
 
 Reconstruction outputs signed_rf, analytic_das, envelope, relative bmode_db,
@@ -277,51 +291,66 @@ correction, calibrated acoustic power, attenuation compensation or contrast
 metric is silently implied. Reuse preprocessing and options consistently when
 comparing acquisitions. Use --help for complete controls.
 
-## 10. Validation completed and limits
+## 10 Validation completed and limits
 
-Eighteen Python tests passed, covering round-trip/bistatic timing, calibration
-signs, the far-corner record bound, interpolation, endpoints, no address wrap,
-signed cancellation/extremes, ADC formats, invalid input, CF/normalisation,
-chunk equivalence, aperture gates, Q12 carry, NPZ round-trip, anti-aliased
-decimation alignment and independent synthetic-target localisation.
+Twenty-three Python tests passed: the original eighteen numerical regressions
+plus current-controller packing/channel selection, 100 and 105 MSPS record
+bounds, complete binary import, calibrated int16 full-scale NPZ/DAS and metadata
+validation. Retained 250 MSPS tests check the generic algorithm and old-file
+compatibility; the selected hardware importer rejects acquisition rates over
+105 MSPS. Coherent cancellation and no-wrap timing remain verified.
 
-Icarus Verilog 12.0 simulations passed for finite capture under random stalls,
-signed extremes, one/max record length, missing-word/error handling, invalid
-length, rearming, geometry width/valid timing, and 36 pixels of 25-position
-Q12 DAS using independently calculated integer expectations. Memory request,
-response and output were stalled; pixel/frame TLAST and malformed-descriptor
-status were checked. The production 32768-sample acquisition top elaborated.
+Four Icarus suites passed: generic capture, the new current-Zmod top, wide
+geometry and 36 pixels of 25-position signed Q12 DAS. Tests include both physical
+channels with distinct int16 extremes, channel-selection changes after arm,
+permanent upstream readiness during DMA stalls, source initialization/error
+gating, missing words, overflow/error handling, memory and output stalls,
+malformed descriptors and frame TLAST. The default 16384-sample top elaborated.
 
-Yosys 0.33 mapped the recommended acquisition top and optional DAS core to
-7-series resources and structural checks passed. Capture mapped to 14 RAMB36E1
-blocks; the DAS core used 2 DSP48E1 and no RF storage. Mapping estimates exclude
-PHY, clock converter, DMA, PS integration and physical routing. Primitive-port
-resizing messages during capture BRAM mapping are not a Vivado DRC/timing result.
-The Vivado synthesis script was supplied, but Vivado, post-route timing and
-on-board acquisition were not run here.
+Yosys 0.33 7-series mapping and structural checks passed. The acquisition top
+uses 8 RAMB36E1 blocks for its line buffer; the optional int16 DAS compute core
+uses 2 DSP48E1 and no RF storage. These estimates exclude vendor controller,
+DMA, PS, CDC and routing. Capture mapping emitted 40 primitive-port resizing
+warnings; they are not a Vivado timing result.
 
-Test environment: Python 3.12.14, NumPy 2.3.5, SciPy 1.17.0, Matplotlib 3.10.8.
-One full 241x401 reference reconstruction of the demonstration took about
-0.339 s in this execution environment, excluding loading, plotting and startup.
-This is an indicative single run, not a hardware/ARM or real-time performance
-claim. Reproduce tests with commands in README and see docs/validation.md.
+The 100 MSPS, 25x8000 synthetic acquisition completed simulate, reconstruct,
+Hann/CF reconstruction and Q12 LUT export. The brightest target remained at
+(0,30 mm). The figure was regenerated at the selected rate. Numeric and resource
+results are recorded in docs/validation.md. Vivado, board-level DRC/CDC/post-route
+timing and on-board analogue acquisition were not run here. Vendor PHY and
+configuration are outside the RTL test boundary.
 
-## 11. Board and ADC decision
+## 11 Selected board and required integration
 
-| Platform | ADC capability | Compatibility and recommendation |
-| --- | --- | --- |
-| Existing ZedBoard + FMC150 | Two 14-bit ADC inputs up to 250 MSPS [2,5] | Keep for the first prototype. ZedBoard offers LPC FMC and DDR [3]; FMC150 is LPC/LVDS [2]. Actual carrier/card revision, VADJ, clock pin route and vendor reference design must be verified. No board swap is required by the DAS mathematics. |
-| Eclypse Z7 + Zmod Scope 1410-105 | Two 14-bit inputs up to 105 MSPS [6,7] | Documented supported pairing, with vendor acquisition examples; satisfies >60 MSPS. Good alternative if existing FMC150 BSP access is difficult. Use the exact 1410-105 variant when following the older software examples; support differs for other variants. |
-| ZC706 + AD-FMCDAQ2-EBZ | Dual 14-bit AD9680 ADC up to 1 GSPS [8] | ADI documents ZC706 support. HPC/JESD204B acquisition and greater data rates add integration effort; unnecessary for the present low-MHz single-element proof of concept. This mezzanine is not a ZedBoard LPC substitute. |
+Eclypse Z7 + Zmod Scope 1410-105 is the selected platform, replacing the previous
+ZedBoard/FMC150 recommendation. The carrier is XC7Z020-1CLG484C with 1 GiB DDR3L;
+the Scope has two AD9648 14-bit inputs and a 105 MSPS maximum [6,7,11]. No further
+board purchase is needed for the stated >60 MSPS single-receiver proof of concept.
 
-The manufacturer's rated maximum ADC rate is not proof of a particular installed
-clock configuration or of timing closure. The software uses the configured and
-verified sample rate from the acquisition file. Avoid choosing a board simply
-because an ADC chip supports 65/100/250 MSPS: electrical connector compatibility,
-clocking, FPGA input bandwidth and a usable reference design matter as much.
-No current purchasing availability or price is asserted.
+Use the current Digilent ZmodScopeController [11] with factory gain/offset
+calibration. It outputs calibrated signed 16-bit CH1 in bits 31..16 and CH2 in
+15..0. Its TREADY must remain high; do not wire it to a stalling DMA. The new
+adapter selects one physical receiver input per record, and the whole-line buffer
+provides the finite DMA packet. Twenty-five mechanical rows are still sequential
+records from the same physical input, not twenty-five simultaneous receivers.
 
-## 12. Next physical milestones
+100 MSPS is the explicit default configuration and meets the requested rate.
+For this profile SysClk100, ADC_SamplingClk and ADC_InClk are each 100 MHz with
+kADC_ClkDiv=1 and kSamplingPeriod=10000 ps. Apply vendor phase/routing constraints,
+initialize and verify the physical rate. The checked low-level reference [12]
+used 40 MSPS and divider 4; importing it unchanged is insufficient. An explicitly
+verified rate up to 105 MSPS can be used with consistent clocks, constraints and
+file metadata. The product maximum alone proves neither the installed clock
+nor routed timing. The old ZmodADC1410_Controller/software format is different.
+
+Follow hardware/integration.md for synchronized source status and PS commands,
+relay/calibration wiring, DMA width/clock conversion and byte counts. Configure
+DMA length width at least 16 for the 32768-byte buffer maximum. For the receiver,
+choose the actual protected input signal's gain and coupling; the nominal ranges
+are +/-1 V high gain and +/-25 V low gain [7]. Scope inputs do not replace a pulser,
+T/R protection, receive amplifier or anti-alias filter.
+
+## 12 Next physical milestones
 
 First obtain a single clean trigger-aligned A-scan with ADC test pattern/sine-wave
 verification. Then calibrate a known stationary wire at two depths, verify stage
@@ -334,17 +363,33 @@ CDC and post-route timing before describing the acquisition as board-ready.
 
 ## Sources
 
-Primary sources checked 6 October 2026. Geometry, numeric budgets, audit findings
+Original sources checked 6 October 2026; Eclypse and current controller sources
+rechecked 11 October 2026. Historical FMC150 sources concern the original audit. Geometry, numeric budgets, audit findings
 and validation results are derived in this work; product facts below come from
 the respective manufacturers or authors.
 
+
 1. Jensen et al., Synthetic Aperture Ultrasound Imaging, Ultrasonics 44 (2006), e5-e15: https://orbit.dtu.dk/en/publications/synthetic-aperture-ultrasound-imaging/
+
 2. Abaco FMC150 specifications/BSP: https://www.abaco.com/Products-and-Services/Digital-Signal-Processing/FPGA-Mezzanine-Cards/FMC150
+
 3. Digilent/Avnet ZedBoard Hardware User Guide v2.2: https://files.digilent.com/resources/programmable-logic/zedboard/ZedBoard_HW_UG_v2_2.pdf
+
 4. AMD Zynq-7000 Overview DS190: https://docs.amd.com/v/u/en-US/ds190-Zynq-7000-Overview
+
 5. TI ADS62P49 datasheet: https://www.ti.com/lit/ds/symlink/ads62p49.pdf
+
 6. Digilent Eclypse Z7: https://digilent.com/shop/eclypse-z7/
+
 7. Digilent Zmod Scope 1410, including variant rates/support: https://digilent.com/shop/zmod-scope-1410-2-channel-14-bit-oscilloscope-module/
+
 8. ADI AD-FMCDAQ2 hardware and ZC706 Linux support: https://www.analog.com/en/resources/evaluation-hardware-and-software/evaluation-boards-kits/eval-ad-fmcdaq2-ebz.html and https://wiki.analog.com/resources/eval/user-guides/ad-fmcdaq2-ebz/software/linux
+
 9. Evident circular-transducer beam/near-field formula: https://ims.evidentscientific.com/en/learn/ndt-tutorials/flaw-detection/beam-characteristics
+
 10. AMD AXI DMA PG021 user parameters: https://docs.amd.com/r/en-US/pg021_axi_dma/User-Parameters
+
+
+11. Digilent current ZmodScopeController guide, calibrated data path and module map, pinned to f4613fff005b098065fd5d619a2b88e55720a423: https://github.com/Digilent/vivado-library/tree/f4613fff005b098065fd5d619a2b88e55720a423/ip/Zmods/ZmodScopeController
+
+12. Digilent Eclypse low-level filter hardware, pinned to 5ea221a3fceb430d7b3005d49ce373cb10bea154: https://github.com/Digilent/Eclypse-Z7-HW/tree/5ea221a3fceb430d7b3005d49ce373cb10bea154

@@ -23,6 +23,7 @@ import warnings
 
 import numpy as np
 from scipy import signal
+from eclypse_z7 import DEFAULT_FS_HZ, CONTROLLER_BITS
 
 
 def _positive(value: float, name: str) -> float:
@@ -373,15 +374,16 @@ def simulate_point_targets(acquisition: Acquisition, n_samples: int, targets,
     return result
 
 
-def save_acquisition(path, rf, acquisition: Acquisition):
+def save_acquisition(path, rf, acquisition: Acquisition, *, metadata=None):
     validate_rf(rf,acquisition)
     np.savez_compressed(path,rf=rf,fs_hz=acquisition.fs_hz,c_m_s=acquisition.c_m_s,
                         rx_positions_m=acquisition.rx_positions_m,
                         tx_positions_m=acquisition.tx_positions_m,t0_s=acquisition.t0_s,
-                        system_delay_s=acquisition.system_delay_s)
+                        system_delay_s=acquisition.system_delay_s,
+                        metadata_json=np.array(json.dumps(metadata or {},sort_keys=True)))
 
 
-def load_acquisition(path, *, encoding="signed", bits=14):
+def load_acquisition(path, *, encoding="signed", bits=CONTROLLER_BITS):
     """NPZ contains rf, fs_hz, rx_positions_m (or x_positions_m), plus calibration."""
     with np.load(path,allow_pickle=False) as data:
         if "rx_positions_m" in data:
@@ -433,8 +435,9 @@ def _cli():
     for p in (rec,lut):
         p.add_argument("input",type=Path)
         p.add_argument("--encoding",choices=["signed","twos-complement","offset-binary"],default="signed")
-        p.add_argument("--adc-bits",type=int,default=14)
-    sim.add_argument("--fs-mhz",type=float,default=250.)
+        p.add_argument("--adc-bits",type=int,default=CONTROLLER_BITS,
+                       help="Stored word width; calibrated Zmod output is 16 bits")
+    sim.add_argument("--fs-mhz",type=float,default=DEFAULT_FS_HZ/1e6)
     sim.add_argument("--pitch-mm",type=float,default=1.)
     sim.add_argument("--npositions",type=int,default=25)
     sim.add_argument("--record-us",type=float,default=80.)

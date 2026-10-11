@@ -1,9 +1,9 @@
-# Reproducible Vivado OUT-OF-CONTEXT synthesis of reviewed post-PHY logic.
+# Reproducible Vivado OUT-OF-CONTEXT synthesis of Eclypse Z7 calibrated capture logic.
 # From repo root: vivado -mode batch -source hardware/synth_ooc.tcl
 # Optional core: append -tclargs das_beamformer_top 10.0
 # This does NOT create a board bitstream or provide ADC I/O timing constraints.
 set top ultrasound_engine_top
-set period_ns 4.0
+set period_ns 10.0
 if {$argc > 0} {set top [lindex $argv 0]}
 if {$argc > 1} {set period_ns [lindex $argv 1]}
 file mkdir build/vivado

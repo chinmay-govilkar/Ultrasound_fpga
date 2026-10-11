@@ -1,8 +1,8 @@
 `timescale 1ns/1ps
 // Optional SMALL-RECORD matrix, two synchronous reads, no reads during writes.
-// Full 25x20000 capture belongs in DDR. The RAM is not reset; fill before reading.
+// The initial 25x8000 dataset is stored in DDR. The RAM is not reset; fill before reading.
 module das_memory_matrix #(
-    parameter NUM_LINES=25,DATA_WIDTH=14,DEPTH_BITS=10,
+    parameter NUM_LINES=25,DATA_WIDTH=16,DEPTH_BITS=10,
     parameter LINE_WIDTH=(NUM_LINES>1 ? $clog2(NUM_LINES) : 1)
 )(
     input wire clk,rst_n,we,

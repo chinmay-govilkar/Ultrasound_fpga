@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 // Registered linear interpolation. Retain Q0.FRAC_BITS scale through the sum.
 module das_single_channel #(
-    parameter DATA_WIDTH=14,FRAC_BITS=12,RESULT_WIDTH=DATA_WIDTH+FRAC_BITS+2
+    parameter DATA_WIDTH=16,FRAC_BITS=12,RESULT_WIDTH=DATA_WIDTH+FRAC_BITS+2
 )(
     input wire clk,rst_n,input_valid,
     input wire signed [DATA_WIDTH-1:0] sample0,sample1,

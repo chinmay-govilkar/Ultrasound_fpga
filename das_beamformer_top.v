@@ -6,7 +6,7 @@
 // Descriptors=Python export_delay_table, explicit addr0,addr1,Q-fraction,valid.
 // protocol_error is sticky: discard the frame on any malformed descriptor.
 module das_beamformer_top #(
-    parameter NUM_LINES=25,DATA_WIDTH=14,ADDR_WIDTH=16,
+    parameter NUM_LINES=25,DATA_WIDTH=16,ADDR_WIDTH=16,
     parameter LINE_WIDTH=(NUM_LINES>1 ? $clog2(NUM_LINES) : 1),FRAC_BITS=12,OUTPUT_WIDTH=32,
     parameter PIXELS_PER_FRAME=241*401
 )(

@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 module tb_capture;
-    reg clk=0; always #2 clk=~clk;
+    reg clk=0; always #5 clk=~clk;
     reg rst_n=0,arm=0,trigger=0,adc_valid=1;
     reg [4:0] record_samples=0,line_id=0;
-    reg signed [13:0] adc_data=0;
+    reg signed [15:0] adc_data=0;
     wire arm_ready,armed,busy,line_done,capture_error;
     wire [15:0] data; wire [1:0] keep; wire [4:0] user;
     wire valid,last; reg ready=0;
@@ -11,8 +11,8 @@ module tb_capture;
     reg checking=0,stalled=0; reg [15:0] held_data;
     reg held_last; reg [4:0] held_user;
     reg [31:0] random_state=32'h9f14ab37;
-    fmc150_axi_capture #(.MAX_SAMPLES(16),.COUNT_WIDTH(5)) dut(
-        .adc_clk(clk),.rst_n(rst_n),.arm(arm),.trigger(trigger),.adc_valid(adc_valid),
+    adc_line_capture #(.MAX_SAMPLES(16),.COUNT_WIDTH(5)) dut(
+        .adc_clk(clk),.rst_n(rst_n),.arm(arm),.trigger(trigger),.adc_valid(adc_valid),.adc_error(1'b0),
         .record_samples(record_samples),.line_id(line_id),.adc_data(adc_data),
         .arm_ready(arm_ready),.armed(armed),.busy(busy),.line_done(line_done),
         .capture_error(capture_error),.m_axis_tdata(data),.m_axis_tkeep(keep),
@@ -54,8 +54,8 @@ module tb_capture;
     endtask
     initial begin
         repeat(4) @(negedge clk); rst_n=1;
-        run_line(8,0,-8192,-1);
-        run_line(1,24,8191,-1);
+        run_line(8,0,-32768,-1);
+        run_line(1,24,32767,-1);
         run_line(16,5,-1234,3);
         @(negedge clk); record_samples=0; arm=1;
         @(negedge clk); arm=0;

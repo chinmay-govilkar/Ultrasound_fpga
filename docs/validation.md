@@ -1,60 +1,83 @@
-# Validation evidence, 6 October 2026
+# Validation evidence on 11 October 2026
 
-Audited upstream: `60ca7e9d2e5efb4c3410f4c75788b38b5ea6b251`.
-The following results concern the revised numerical/post-PHY logic, not a board bitstream.
+Selected target: Eclypse Z7 + Zmod Scope 1410-105, 100 MSPS configured profile.
+Original audited main: `60ca7e9d2e5efb4c3410f4c75788b38b5ea6b251`.
+Migration parent: `01683703dcfa6a246d1433a0b3a4e0e5ecb868c0`.
+Results concern numerical and current-controller-boundary logic, not a board bitstream.
 
-## Python
+## Python and complete CLI paths
 
 Python 3.12.14; NumPy 2.3.5; SciPy 1.17.0; Matplotlib 3.10.8.
 
-`python -m unittest discover -s tests -p 'test_*.py' -v`
+`python -m unittest discover -s tests -p 'test_*.py' -v`: **23 tests passed**.
+The original 18 DAS regressions remain; five new Eclypse tests cover packed CH1/CH2
+selection, calibrated int16 limits, exact-length single/multi-file imports,
+100/105 MSPS record bounds, complete packer CLI, metadata and invalid-rate rejection.
+The full-scale 25-position sums are -819200 and +819175. Signed cancellation,
+fractional timing, no wrapping, calibration, aperture gates, coherence weighting,
+anti-aliased decimation and independent target localization remain covered.
+Earlier 250 MSPS signed acquisitions retain their stored rate and remain readable;
+the platform-specific importer rejects new Zmod rate declarations above 105 MSPS.
 
-18 tests passed. Independent synthetic target localised within one 0.1 mm image
-grid cell. Signed extremes produced -204800 and +204775 with 25 channels.
-RF and its negative cancelled coherently. No wrapped or clipped-edge
-contribution occurred outside the record. /4 anti-aliased decimation retained
-the timing origin and 2.25 MHz test sinusoid.
+At 100 MSPS the default 80 us RF shape is 25x8000. The 10..50 mm depth,
+-12..12 mm lateral grid requires 7204 samples before pulse/latency margin.
+At 105 MSPS the corresponding figures are 25x8400 and 7564 minimum samples.
+Both records fit the 16384-sample buffer. The centre trace index for (0,30 mm)
+is 3896.103896 at 100 MSPS, rather than 9740.259740 at the old 250 MSPS setting.
 
-Complete CLI paths exercised: simulate, reconstruct, Hann/CF reconstruction and
-Q12 delay-table export. Example 401x241 image peak: row 200, column 120, (0,30 mm).
-Single full numerical reconstruction: approximately 0.339 seconds here; excludes
-load/plot/startup and is not an ARM, throughput or real-time claim.
+Complete simulate, rectangular reconstruction, Hann/CF reconstruction and Q12
+LUT export passed at 100 MSPS. The brightest target was at row 200, column 120,
+(0,30 mm), with no unsupported grid pixels. The report figure was regenerated. One full numerical reconstruction took
+about 0.293 s here, excluding loading, plotting and startup; this is not a
+hardware or ARM throughput claim.
+The packer CLI was tested with calibrated int16 values outside the raw 14-bit
+range so accidental 14-bit truncation or reinterpretation would fail.
 
-## RTL simulations and elaboration
+## RTL simulation and elaboration
 
 Icarus Verilog 12.0: `python tests/run_hdl_tests.py`.
 
 | Suite | Result |
 | --- | --- |
-| Capture | PASS: sign extension, 1/maximum length, random AXIS stalls, stable TDATA/TLAST/TUSER, missing sample preserved at zero with error, invalid lengths, rearm |
-| Geometry | PASS: widened signed differences, coordinate extremes, 50 mm in micrometres, three-stage valid pipeline |
-| DAS + synchronous matrix | PASS: 36 pixels x25 positions, independently calculated Q12 arithmetic, signed limits, fractional edges, invalid masks, request/response/output stalls, frame TLAST, malformed descriptor status |
-| Recommended acquisition top | PASS elaboration with default 32768-sample buffer |
+| Generic capture | PASS: int16 limits, 1/max length, random AXIS stalls, stable TDATA/TLAST/TUSER, zero slot and error for missing valid word, invalid lengths and rearm |
+| Eclypse current-controller top | PASS: CH1 upper/CH2 lower, int16 extremes, channel latched at arm, always-high source TREADY during all states and output stalls, initialization/error gating, missing words, source overflow error and reacquisition |
+| Geometry | PASS: signed coordinate extremes, 50 mm in micrometres, widened squares and valid pipeline |
+| DAS and synchronous matrix | PASS: 36 pixels x25, independently computed int16/Q12 expectations, signed rails, fractional endpoints, invalid contributors, memory request/response/output stalls, frame TLAST and malformed descriptor |
+| Production acquisition top | PASS elaboration with default 16384x16 line buffer |
 
-The optional core has one outstanding memory request. Test expectations are
-calculated independently with integer interpolation and summed before rounding.
-The vendor LVDS PHY is not stubbed and represented as tested: it is outside the
-signed-sample boundary used by these tests.
+The vendor physical IDDR/FIFO/SPI/relay/calibration IP is outside these simulation
+suites. Tests start at its documented calibrated output interface. Clock-domain
+crossing, actual pin timing and calibration coefficients are not emulated as
+verified board behavior.
 
 ## Resource synthesis
 
-Yosys 0.33: `bash tests/run_synthesis.sh`, target family `xc7`.
+Yosys 0.33: `bash tests/run_synthesis.sh`, family xc7, both structural checks passed.
 
 | Design | Selected mapped resources | Structural check |
 | --- | --- | --- |
-| ultrasound_engine_top / capture, 32768 x14 line buffer | 14 RAMB36E1, 74 FDRE, 14 CARRY4 | 0 problems |
-| das_beamformer_top / interpolation | 2 DSP48E1, 150 FDRE, 29 CARRY4, no RF BRAM | 0 problems |
+| Current Zmod acquisition top with 16384x16 line buffer | 8 RAMB36E1, 74 FDRE, 13 CARRY4 | 0 problems |
+| Optional int16 DAS compute core | 2 DSP48E1, 154 FDRE, 29 CARRY4; no RF BRAM | 0 problems |
 
-Capture BRAM mapping produced primitive-port resizing messages. These estimates
-exclude PHY, DMA, PS, clock conversion and physical routing. Vivado may choose a
-different RAM organisation. Synthesis is not post-route 250 MHz timing closure.
-`hardware/synth_ooc.tcl` was delivered but was not executed because Vivado is
-not available here. No measured analogue data or on-board test was supplied.
+The reusable buffer mapped to eight RAMB36 blocks, reduced from the prior
+32768x14 capture's fourteen. These estimates exclude the vendor controller,
+PS, DMA, clock conversion, configuration, control CDC and physical routing.
+Capture BRAM mapping produced 40 primitive-port resizing warnings; these are
+not Vivado DRC or timing results. A truncated local ABC executable caused an
+initial tool failure; mapping passed with a fresh complete tool extraction.
+
+`hardware/synth_ooc.tcl` selects xc7z020clg484-1 and a 10 ns default clock.
+The controller configuration helper uses parameters checked against Digilent
+vivado-library commit `f4613fff005b098065fd5d619a2b88e55720a423`; it was not executed
+in Vivado here. The checked Eclypse low-level filter reference configured 40 MSPS,
+so the migration explicitly requires reconfiguring its clocks and variant.
+Vivado OOC, board DRC/CDC/post-route timing and physical acquisition were not run.
 
 ## Required physical validation
 
-Complete vendor PHY/configuration and actual XDC; verify ADC patterns, clocks and
-encoding; calibrate a stationary target; verify all 25 record identities and
-mechanical positions; inspect signal clipping/coverage; validate phase-centre
-model and grating lobes; run Vivado DRC, CDC and post-route timing. The review
-document and hardware integration contract describe these concrete next steps.
+Integrate the current controller, actual SYZYGY-port XDC, calibration/relay control,
+PS command/status CDC and S2MM DMA. Verify test patterns and the configured sample
+rate, protected receiver gain/coupling and clipping, shared trigger origin and
+stationary-reflector timing. Acquire and identify all 25 mechanical records,
+check repeatability, validate the point-centre model and spatial sampling,
+and run board DRC, CDC and post-route timing before claiming a working bitstream.
